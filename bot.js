@@ -1,28 +1,30 @@
 #! /usr/bin/env node
-// bot.js server#chan server2#chan
 
 const assign = require('lodash').defaults;
 const Client = require('tennu').Client;
 const mainconfig = require('./config.json');
 const inspect = require('util').inspect;
+const format = require('util').format;
 const program = require('commander');
+
+// Mutating String's prototype is evil, so this program is evil.
+if (typeof String.prototype.startsWith != 'function') {
+    // see below for better implementation!
+    String.prototype.startsWith = function (str){
+        return this.indexOf(str) == 0;
+    };
+}
 
 program
     .version('1.0.0')
     .usage('[options] <server1#chan1> <server2#chan2>')
-    .option('-n', '--nickname [nickname]', 'Bot\'s nickname')
-    .option('-u', '--username [username]', 'Bot\'s username')
-    .option('-r', '--realname [realname]', 'Bot\'s realname')
+    .option('-n, --nickname [nickname]', 'Bot\'s nickname')
+    .option('-u, --username [username]', 'Bot\'s username')
+    .option('-r, --realname [realname]', 'Bot\'s realname')
     .parse(process.argv);
 
-// This isn't working. :(
 const names = (function () {
     const config = {};
-
-    console.log(inspect(program));
-
-    console.log(program.nickname);
-    console.log(process.username);
 
     if (program.nickname) {
         config.nickname = program.nickname;
@@ -39,40 +41,54 @@ const names = (function () {
     return config;
 }());
 
-const clients = program.args.map(function (server) {
-    const server_chan = server.split(/#/g);
+const clients = program.args.map(function (server, ix) {
+    const server_chan = server.split('#');
+
+    program.args[ix] = {
+        server: server_chan[0],
+        channel: '#' + server_chan[1]
+    }
 
     return {
-        server: server_chan[0],
-        channels: ['#' + server_chan[1]]
+        server: program.args[ix].server,
+        channels: [program.args[ix].channel]
     };
 }).map(function (config) {
-    return assign({}, mainconfig, names, config);
+    return assign({}, config, names, mainconfig);
 }).map(function (config) {
+    //console.log(inspect(config));
     return Client(config);
 });
 
-// Relay between first channel and second.
-clients[0].on('privmsg', function (privmsg) {
-    if (privmsg.isQuery) {
-        return;
-    }
+function relay (cix) {
+    const channel = program.args[cix].channel;
 
-    clients[1].say(format('<%s> %s'), privmsg.nickname, privmsg.message);
-});
+    return function (privmsg) {
+        if (privmsg.isQuery) {
+            return;
+        }
 
-// Relay between second channel and first.
-clients[1].on('privmsg', function (privmsg) {
-    if (privmsg.isQuery) {
-        return;
-    }
+        var toSay;
 
-    clients[0].say(format('<%s> %s'), privmsg.nickname, privmsg.message);
-});
+        if (privmsg.message.charCodeAt(0) === 1) {
+            if (!privmsg.message.startsWith('\u0001ACTION')) {
+                return // Unknown CTCP
+            }
 
-// Disabled while getting commander working.
-/*
+            toSay = format('* %s %s', privmsg.nickname, privmsg.message.slice(8, -1));
+        } else {
+            // Not CTCP
+            toSay = format('<%s> %s', privmsg.nickname, privmsg.message);
+        }
+
+        console.log(format('%s-%s: %s', cix, channel, toSay));
+        clients[cix].say(channel, toSay);
+    };
+}
+
+clients[0].on('privmsg', relay(1));
+clients[1].on('privmsg', relay(0));
+
 clients.forEach(function (client) {
     client.connect();
 });
-*/
